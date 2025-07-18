@@ -50,3 +50,6 @@ def compare_faces(sourceFile, targetFile):
     # return len(response['FaceMatches']) 
     return f"두얼굴의 일치율은 {similarity}% 입니다."
     
+
+
+# 수정했습니다.
