@@ -1,4 +1,4 @@
-# main_upload.py - 이모티콘 커밋 메시지 포함 완전 버전
+# main_upload.py - 이모티콘 커밋 메시지 + 파일 삭제 동기화 포함 완전 버전
 import time
 import requests
 import base64
@@ -102,8 +102,123 @@ def upload_file_to_github(local_file_path):
         print(f"  ❌ {repo_file_path} 네트워크 오류: {e}")
         return False
 
+# 🔧 새로 추가된 삭제 기능들
+def get_github_files():
+    """GitHub 저장소의 파일 목록 가져오기"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            files_data = response.json()
+            # 파일만 필터링 (폴더 제외)
+            github_files = {}
+            for item in files_data:
+                if item['type'] == 'file':
+                    github_files[item['name']] = item['sha']
+            return github_files
+        else:
+            print(f"⚠️ GitHub 파일 목록 가져오기 실패: {response.status_code}")
+            return {}
+    except Exception as e:
+        print(f"⚠️ GitHub 파일 목록 가져오기 오류: {e}")
+        return {}
+
+def get_local_files():
+    """로컬 폴더의 파일 목록 가져오기"""
+    try:
+        # 환경변수에서 파일 형식 읽어오기
+        file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
+        file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
+        file_patterns = [f'*.{ext}' for ext in file_extensions_list]
+        
+        local_files = set()
+        for pattern in file_patterns:
+            files = glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern))
+            for file_path in files:
+                if os.path.isfile(file_path):
+                    local_files.add(os.path.basename(file_path))
+        
+        return local_files
+    except Exception as e:
+        print(f"⚠️ 로컬 파일 목록 가져오기 오류: {e}")
+        return set()
+
+def delete_file_from_github(filename, sha):
+    """GitHub에서 파일 삭제"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{filename}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        
+        # 삭제 데이터 준비
+        data = {
+            "message": f"🗑️ Delete {filename}",  # 🗑️ 삭제 이모티콘
+            "sha": sha
+        }
+        
+        print(f"  🗑️ {filename} 삭제를 시도합니다...")
+        response = requests.delete(url, headers=headers, data=json.dumps(data))
+        
+        if response.status_code == 200:
+            print(f"  ✅ 🗑️ {filename} 삭제 성공!")
+            return True
+        else:
+            print(f"  ❌ {filename} 삭제 실패! (상태 코드: {response.status_code})")
+            error_msg = response.json().get('message', 'Unknown error')
+            print(f"     오류 내용: {error_msg}")
+            return False
+    except Exception as e:
+        print(f"  ❌ {filename} 삭제 오류: {e}")
+        return False
+
+def sync_deleted_files():
+    """삭제된 파일들을 GitHub에서도 제거"""
+    print(f"\n🔍 삭제된 파일 동기화 확인 중...")
+    
+    # GitHub와 로컬 파일 목록 가져오기
+    github_files = get_github_files()  # {filename: sha}
+    local_files = get_local_files()    # {filename}
+    
+    if not github_files:
+        print("📂 GitHub 저장소가 비어있거나 파일 목록을 가져올 수 없습니다.")
+        return
+    
+    # GitHub에만 있고 로컬에 없는 파일들 찾기
+    files_to_delete = []
+    for github_file, sha in github_files.items():
+        if github_file not in local_files:
+            files_to_delete.append((github_file, sha))
+    
+    if not files_to_delete:
+        print("🔄 삭제할 파일이 없습니다. 모든 파일이 동기화되어 있습니다.")
+        return
+    
+    print(f"🗑️ {len(files_to_delete)}개의 삭제된 파일을 발견했습니다.")
+    for filename, _ in files_to_delete:
+        print(f"   📄 {filename} (로컬에서 삭제됨)")
+    
+    # 삭제 실행
+    deleted = 0
+    failed = 0
+    for filename, sha in files_to_delete:
+        success = delete_file_from_github(filename, sha)
+        if success:
+            deleted += 1
+        else:
+            failed += 1
+        time.sleep(0.5)  # API 제한 방지
+    
+    # 결과 출력
+    if failed == 0:
+        print(f"\n🎉 파일 삭제 동기화 완료! 🗑️ {deleted}개 파일 모두 삭제됨")
+    else:
+        print(f"\n🎉 파일 삭제 동기화 완료! 🗑️ {deleted}개 삭제 성공, ❌ {failed}개 실패")
+    
+    print("=" * 60)
+
 def upload_existing_files():
-    """프로그램 시작 시 기존 파일들을 자동으로 업로드"""
+    """프로그램 시작 시 기존 파일들을 자동으로 업로드하고 삭제된 파일 동기화"""
     print(f"\n📂 기존 파일 확인 중...")
     
     # 환경변수에서 파일 형식 읽어오기
@@ -119,32 +234,33 @@ def upload_existing_files():
     
     if not files:
         print("📁 기존 파일이 없습니다.")
-        return
-    
-    print(f"🔍 {len(files)}개의 기존 파일을 발견했습니다.")
-    print("📤 자동으로 기존 파일들을 업로드합니다...")
-    
-    uploaded = 0
-    failed = 0
-    for file_path in files:
-        if os.path.isfile(file_path):
-            print(f"\n📄 기존 파일 처리: {os.path.basename(file_path)}")
-            success = upload_file_to_github(file_path)
-            if success:
-                uploaded += 1
-            else:
-                failed += 1
-            time.sleep(1)  # API 제한 방지
-    
-    # 🔧 이모티콘 포함 완료 메시지
-    if failed == 0:
-        print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
     else:
-        print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
-    print("=" * 60)
+        print(f"🔍 {len(files)}개의 기존 파일을 발견했습니다.")
+        print("📤 자동으로 기존 파일들을 업로드합니다...")
+        
+        uploaded = 0
+        failed = 0
+        for file_path in files:
+            if os.path.isfile(file_path):
+                print(f"\n📄 기존 파일 처리: {os.path.basename(file_path)}")
+                success = upload_file_to_github(file_path)
+                if success:
+                    uploaded += 1
+                else:
+                    failed += 1
+                time.sleep(1)  # API 제한 방지
+        
+        # 업로드 결과
+        if failed == 0:
+            print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
+        else:
+            print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
+    
+    # 🔧 삭제된 파일 동기화 추가
+    sync_deleted_files()
 
 def scheduled_upload():
-    """예약된 시간에 실행되는 업로드 함수"""
+    """예약된 시간에 실행되는 업로드 함수 (삭제 동기화 포함)"""
     print(f"\n⏰ 예약 업로드 시작: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 환경변수에서 파일 형식 읽어오기
@@ -160,26 +276,28 @@ def scheduled_upload():
     
     if not files:
         print("📂 업로드할 파일이 없습니다.")
-        return
-    
-    print(f"📁 {len(files)}개 파일을 업로드합니다.")
-    uploaded = 0
-    failed = 0
-    
-    for file_path in files:
-        if os.path.isfile(file_path):
-            success = upload_file_to_github(file_path)
-            if success:
-                uploaded += 1
-            else:
-                failed += 1
-            time.sleep(1)  # API 제한 방지
-    
-    # 🔧 이모티콘 포함 완료 메시지
-    if failed == 0:
-        print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
     else:
-        print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
+        print(f"📁 {len(files)}개 파일을 업로드합니다.")
+        uploaded = 0
+        failed = 0
+        
+        for file_path in files:
+            if os.path.isfile(file_path):
+                success = upload_file_to_github(file_path)
+                if success:
+                    uploaded += 1
+                else:
+                    failed += 1
+                time.sleep(1)  # API 제한 방지
+        
+        # 업로드 결과
+        if failed == 0:
+            print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
+        else:
+            print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
+    
+    # 🔧 삭제된 파일 동기화 추가
+    sync_deleted_files()
 
 def setup_scheduler():
     """스케줄러 설정"""
@@ -263,7 +381,7 @@ def run_upload_system():
     print(f"🔧 업로드 모드: {UPLOAD_MODE}")
     print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")
     
-    # 기존 파일 자동 업로드
+    # 기존 파일 자동 업로드 + 삭제 동기화
     upload_existing_files()
     
     # 실시간 감시 시작
@@ -319,7 +437,7 @@ if __name__ == "__main__":
     print(f"🔧 업로드 모드: {UPLOAD_MODE}")
     print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")
     
-    # 기존 파일 자동 업로드
+    # 기존 파일 자동 업로드 + 삭제 동기화
     upload_existing_files()
     
     # 실시간 감시 시작
