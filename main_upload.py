@@ -1,4 +1,4 @@
-# main_upload.py - 1번 방법 (자동 기존 파일 업로드)
+# main_upload.py - 파일 형식 설정 기능 추가된 완전 버전
 import time
 import requests
 import base64
@@ -21,6 +21,7 @@ SCHEDULE_HOUR = None
 SCHEDULE_MINUTE = None
 REPEAT_OPTION = None
 BRANCH = None
+FILE_EXTENSIONS = None  # 🔧 파일 형식 추가
 
 def check_env_config():
     """환경 설정 확인"""
@@ -85,13 +86,18 @@ def upload_file_to_github(local_file_path):
     except requests.exceptions.RequestException as e:
         print(f"  ❌ 네트워크 오류 (업로드 중): {e}")
 
-# 🔧 1번 방법: 자동 기존 파일 업로드
+# 🔧 1번 방법: 자동 기존 파일 업로드 (파일 형식 설정 적용)
 def upload_existing_files():
     """프로그램 시작 시 기존 파일들을 자동으로 업로드"""
     print(f"\n📂 기존 파일 확인 중...")
     
-    # 폴더 내 모든 파일 검색
-    file_patterns = ['*.py', '*.txt', '*.md', '*.json', '*.js', '*.html', '*.css']
+    # 🔧 환경변수에서 파일 형식 읽어오기
+    file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
+    file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
+    file_patterns = [f'*.{ext}' for ext in file_extensions_list]
+    
+    print(f"📋 지원 파일 형식: {', '.join(file_extensions_list)}")
+    
     files = []
     for pattern in file_patterns:
         files.extend(glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern)))
@@ -118,8 +124,13 @@ def scheduled_upload():
     """예약된 시간에 실행되는 업로드 함수"""
     print(f"\n⏰ 예약 업로드 시작: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 폴더 내 모든 파일 업로드
-    file_patterns = ['*.py', '*.txt', '*.md', '*.json', '*.js', '*.html', '*.css']
+    # 🔧 환경변수에서 파일 형식 읽어오기
+    file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
+    file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
+    file_patterns = [f'*.{ext}' for ext in file_extensions_list]
+    
+    print(f"📋 지원 파일 형식: {', '.join(file_extensions_list)}")
+    
     files = []
     for pattern in file_patterns:
         files.extend(glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern)))
@@ -165,17 +176,29 @@ class FileEventHandler(FileSystemEventHandler):
     """파일 시스템 이벤트 핸들러"""
     def on_created(self, event):
         if not event.is_directory:
-            upload_file_to_github(event.src_path)
+            # 🔧 파일 형식 체크
+            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
+            if self.is_supported_file(file_ext):
+                upload_file_to_github(event.src_path)
 
     def on_modified(self, event):
         if not event.is_directory:
-            time.sleep(1)  # 파일 쓰기 완료 대기
-            upload_file_to_github(event.src_path)
+            # 🔧 파일 형식 체크
+            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
+            if self.is_supported_file(file_ext):
+                time.sleep(1)  # 파일 쓰기 완료 대기
+                upload_file_to_github(event.src_path)
+    
+    def is_supported_file(self, file_ext):
+        """지원되는 파일 형식인지 확인"""
+        file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
+        supported_extensions = [ext.strip() for ext in file_extensions_str.split(',')]
+        return file_ext.lower() in supported_extensions
 
 def run_upload_system():
     """메인 업로드 시스템 실행 함수 (GUI에서 호출용)"""
     global GITHUB_TOKEN, GITHUB_USERNAME, REPO_NAME, WATCH_FOLDER_PATH
-    global UPLOAD_MODE, SCHEDULE_HOUR, SCHEDULE_MINUTE, REPEAT_OPTION, BRANCH
+    global UPLOAD_MODE, SCHEDULE_HOUR, SCHEDULE_MINUTE, REPEAT_OPTION, BRANCH, FILE_EXTENSIONS
     
     print("🚀 GitHub 자동 업로드 시스템 시작!")
     print("=" * 60)
@@ -183,16 +206,17 @@ def run_upload_system():
     # .env 파일 로드
     load_dotenv()
     
-    # 설정 값 로드
+    # 🔧 설정 값 로드 (환경변수 이름 수정 + 파일 형식 추가)
     GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
     GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
-    REPO_NAME = os.getenv('GITHUB_REPO')
-    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER')
+    REPO_NAME = os.getenv('GITHUB_REPO')        # ✅ 수정: REPO_NAME → GITHUB_REPO
+    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER') # ✅ 수정: WATCH_FOLDER_PATH → WATCH_FOLDER
     UPLOAD_MODE = os.getenv('UPLOAD_MODE', 'realtime')
     SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', 14))
     SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', 30))
     REPEAT_OPTION = os.getenv('REPEAT_OPTION', 'daily')
     BRANCH = os.getenv('BRANCH', 'main')
+    FILE_EXTENSIONS = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')  # 🔧 추가
     
     # 환경 설정 확인
     if not check_env_config():
@@ -204,6 +228,7 @@ def run_upload_system():
     print(f"📂 저장소: {REPO_NAME}")
     print(f"👀 감시 폴더: {WATCH_FOLDER_PATH}")
     print(f"🔧 업로드 모드: {UPLOAD_MODE}")
+    print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")  # 🔧 추가
     
     # 🔧 기존 파일 자동 업로드 (1번 방법)
     upload_existing_files()
@@ -237,16 +262,17 @@ if __name__ == "__main__":
     # .env 파일 로드
     load_dotenv()
     
-    # 설정 값 로드
+    # 🔧 설정 값 로드 (환경변수 이름 수정 + 파일 형식 추가)
     GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
     GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
-    REPO_NAME = os.getenv('GITHUB_REPO')
-    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER')
+    REPO_NAME = os.getenv('GITHUB_REPO')        # ✅ 수정: REPO_NAME → GITHUB_REPO
+    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER') # ✅ 수정: WATCH_FOLDER_PATH → WATCH_FOLDER
     UPLOAD_MODE = os.getenv('UPLOAD_MODE', 'realtime')
     SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', 14))
     SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', 30))
     REPEAT_OPTION = os.getenv('REPEAT_OPTION', 'daily')
     BRANCH = os.getenv('BRANCH', 'main')
+    FILE_EXTENSIONS = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')  # 🔧 추가
     
     # 환경 설정 확인
     if not check_env_config():
@@ -258,6 +284,7 @@ if __name__ == "__main__":
     print(f"📂 저장소: {REPO_NAME}")
     print(f"👀 감시 폴더: {WATCH_FOLDER_PATH}")
     print(f"🔧 업로드 모드: {UPLOAD_MODE}")
+    print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")  # 🔧 추가
     
     # 🔧 기존 파일 자동 업로드 (1번 방법)
     upload_existing_files()
