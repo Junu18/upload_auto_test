@@ -1,4 +1,4 @@
-# main_upload.py - 이모티콘 커밋 메시지 + 파일 삭제 동기화 포함 완전 버전
+# main_upload.py - 실시간 파일 삭제 감지 포함 완전 버전
 import time
 import requests
 import base64
@@ -58,7 +58,7 @@ def upload_file_to_github(local_file_path):
         print(f"  ❌ 파일 읽기 실패: {e}")
         return False
     
-    # 🔧 기존 파일 확인 및 커밋 메시지 결정
+    # 기존 파일 확인 및 커밋 메시지 결정
     sha = None
     is_update = False
     try:
@@ -69,7 +69,7 @@ def upload_file_to_github(local_file_path):
     except requests.exceptions.RequestException:
         pass
     
-    # 🔧 이모티콘 커밋 메시지 설정
+    # 이모티콘 커밋 메시지 설정
     if is_update:
         commit_message = f"🔄 Update {repo_file_path}"
         action_emoji = "🔄"
@@ -81,7 +81,7 @@ def upload_file_to_github(local_file_path):
     
     # 업로드 데이터 준비
     data = {
-        "message": commit_message,  # 🔧 이모티콘 포함 메시지
+        "message": commit_message,
         "content": content_encoded
     }
     if sha:
@@ -102,7 +102,6 @@ def upload_file_to_github(local_file_path):
         print(f"  ❌ {repo_file_path} 네트워크 오류: {e}")
         return False
 
-# 🔧 새로 추가된 삭제 기능들
 def get_github_files():
     """GitHub 저장소의 파일 목록 가져오기"""
     try:
@@ -153,7 +152,7 @@ def delete_file_from_github(filename, sha):
         
         # 삭제 데이터 준비
         data = {
-            "message": f"🗑️ Delete {filename}",  # 🗑️ 삭제 이모티콘
+            "message": f"🗑️ Delete {filename}",
             "sha": sha
         }
         
@@ -256,7 +255,7 @@ def upload_existing_files():
         else:
             print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
     
-    # 🔧 삭제된 파일 동기화 추가
+    # 삭제된 파일 동기화 추가
     sync_deleted_files()
 
 def scheduled_upload():
@@ -296,7 +295,7 @@ def scheduled_upload():
         else:
             print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
     
-    # 🔧 삭제된 파일 동기화 추가
+    # 삭제된 파일 동기화 추가
     sync_deleted_files()
 
 def setup_scheduler():
@@ -321,8 +320,9 @@ def run_scheduler():
         schedule.run_pending()
         time.sleep(60)  # 1분마다 체크
 
+# 🔧 실시간 파일 삭제 감지 포함 이벤트 핸들러
 class FileEventHandler(FileSystemEventHandler):
-    """파일 시스템 이벤트 핸들러"""
+    """파일 시스템 이벤트 핸들러 (삭제 감지 포함)"""
     def on_created(self, event):
         if not event.is_directory:
             # 파일 형식 체크
@@ -339,6 +339,44 @@ class FileEventHandler(FileSystemEventHandler):
                 print(f"\n🔄 파일 수정 감지: {os.path.basename(event.src_path)}")
                 time.sleep(1)  # 파일 쓰기 완료 대기
                 upload_file_to_github(event.src_path)
+    
+    # 🔧 새로 추가: 파일 삭제 실시간 감지
+    def on_deleted(self, event):
+        if not event.is_directory:
+            # 파일 형식 체크
+            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
+            if self.is_supported_file(file_ext):
+                filename = os.path.basename(event.src_path)
+                print(f"\n🗑️ 파일 삭제 감지: {filename}")
+                self.handle_file_deletion(filename)
+    
+    def handle_file_deletion(self, filename):
+        """삭제된 파일을 GitHub에서도 제거"""
+        try:
+            # GitHub에서 파일 정보 가져오기 (sha 필요)
+            url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{filename}"
+            headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+            
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                file_data = response.json()
+                sha = file_data.get('sha')
+                
+                if sha:
+                    success = delete_file_from_github(filename, sha)
+                    if success:
+                        print(f"  ✅ 실시간 삭제 완료: {filename}")
+                    else:
+                        print(f"  ❌ 실시간 삭제 실패: {filename}")
+                else:
+                    print(f"  ⚠️ {filename}의 SHA를 가져올 수 없습니다.")
+            elif response.status_code == 404:
+                print(f"  ℹ️ {filename}는 이미 GitHub에 없습니다.")
+            else:
+                print(f"  ⚠️ {filename} 정보 조회 실패: {response.status_code}")
+                
+        except Exception as e:
+            print(f"  ❌ {filename} 삭제 처리 중 오류: {e}")
     
     def is_supported_file(self, file_ext):
         """지원되는 파일 형식인지 확인"""
@@ -395,7 +433,7 @@ def run_upload_system():
         observer = Observer()
         observer.schedule(event_handler, WATCH_FOLDER_PATH, recursive=False)
         observer.start()
-        print("🔄 실시간 파일 감시 시작!")
+        print("🔄 실시간 파일 감시 시작! (추가/수정/삭제 모두 감지)")  # 🔧 메시지 업데이트
     
     # 스케줄러 시작
     if UPLOAD_MODE in ["schedule", "hybrid"]:
@@ -405,7 +443,7 @@ def run_upload_system():
     
     print("=" * 60)
     print("📂 GitHub 자동 업로드 시스템이 실행 중입니다...")
-    print("💡 감시 폴더에 파일을 넣으면 자동으로 업로드됩니다.")
+    print("💡 감시 폴더에서 파일을 추가/수정/삭제하면 자동으로 GitHub에 반영됩니다.")  # 🔧 메시지 업데이트
     
     return True
 
@@ -451,7 +489,7 @@ if __name__ == "__main__":
         observer = Observer()
         observer.schedule(event_handler, WATCH_FOLDER_PATH, recursive=False)
         observer.start()
-        print("🔄 실시간 파일 감시 시작!")
+        print("🔄 실시간 파일 감시 시작! (추가/수정/삭제 모두 감지)")
     
     # 스케줄러 시작
     if UPLOAD_MODE in ["schedule", "hybrid"]:
@@ -461,7 +499,7 @@ if __name__ == "__main__":
     
     print("=" * 60)
     print("📂 GitHub 자동 업로드 시스템이 실행 중입니다...")
-    print("💡 감시 폴더에 파일을 넣으면 자동으로 업로드됩니다.")
+    print("💡 감시 폴더에서 파일을 추가/수정/삭제하면 자동으로 GitHub에 반영됩니다.")
     print("(Ctrl+C를 눌러서 종료)")
     
     # 상태 표시
@@ -471,7 +509,7 @@ if __name__ == "__main__":
     try:
         while True:
             mode_text = {
-                "realtime": "실시간 감시",
+                "realtime": "실시간 감시 (추가/수정/삭제)",
                 "schedule": f"예약 업로드 ({SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d})",
                 "hybrid": f"실시간 + 예약 ({SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d})"
             }
