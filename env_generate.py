@@ -1,4 +1,4 @@
-# env_generator.py - 수정된 최종 버전
+# env_generator.py - 파일 형식 설정 기능 추가된 완전 버전
 import os
 import re
 import requests
@@ -122,24 +122,49 @@ class EnvGenerator:
         except ValueError:
             return False, "시간과 분은 숫자여야 합니다."
     
+    # 🔧 파일 형식 유효성 검사 메서드 추가
+    def validate_file_extensions(self, file_extensions):
+        """파일 형식 유효성 검사"""
+        if not file_extensions:
+            return False, "파일 형식을 입력해주세요."
+        
+        try:
+            # 쉼표로 분리하여 각 확장자 검사
+            ext_list = [ext.strip().replace('*.', '').replace('*', '') for ext in file_extensions.split(',')]
+            ext_list = [ext for ext in ext_list if ext]  # 빈 문자열 제거
+            
+            if not ext_list:
+                return False, "유효한 파일 형식이 없습니다."
+            
+            # 각 확장자가 유효한지 검사
+            for ext in ext_list:
+                if not re.match(r'^[a-zA-Z0-9]+$', ext):
+                    return False, f"'{ext}'는 유효하지 않은 파일 형식입니다. (영문, 숫자만 가능)"
+            
+            return True, f"파일 형식 설정: {', '.join(ext_list)}"
+            
+        except Exception as e:
+            return False, f"파일 형식 검증 중 오류: {str(e)}"
+    
     def create_env_file_with_schedule(self, token, username, repo_name, folder_path, 
                                     upload_mode, schedule_hour=None, schedule_minute=None, 
-                                    repeat_option="daily"):
-        """스케줄링 기능이 포함된 .env 파일 생성"""
+                                    repeat_option="daily", file_extensions="py,txt,md,json,js,html,css"):
+        """스케줄링 기능이 포함된 .env 파일 생성 (파일 형식 설정 포함)"""
         try:
             # 기본 검증
             validations = [
                 self.validate_token(token),
                 self.validate_username(username),
                 self.validate_repo_name(repo_name),
-                self.validate_folder_path(folder_path)
+                self.validate_folder_path(folder_path),
+                self.validate_file_extensions(file_extensions)  # 🔧 파일 형식 검증 추가
             ]
             
             for is_valid, message in validations:
                 if not is_valid:
                     return False, message
             
-            # 🔧 스케줄 설정 검증 (수정된 부분)
+            # 스케줄 설정 검증 (수정된 부분)
             schedule_config = ""
             if upload_mode in ["schedule", "hybrid"]:
                 if schedule_hour is None or schedule_minute is None:
@@ -158,7 +183,7 @@ SCHEDULE_MINUTE={schedule_minute}
 REPEAT_OPTION={repeat_option}
 """
             else:
-                # 🔧 realtime 모드에서는 기본값 설정
+                # realtime 모드에서는 기본값 설정
                 schedule_config = f"""
 # 스케줄 설정
 UPLOAD_MODE={upload_mode}
@@ -173,6 +198,11 @@ REPEAT_OPTION={repeat_option}
             if not repo_valid:
                 return False, repo_message
             
+            # 파일 형식 정리
+            ext_list = [ext.strip().replace('*.', '').replace('*', '') for ext in file_extensions.split(',')]
+            ext_list = [ext for ext in ext_list if ext]  # 빈 문자열 제거
+            clean_file_extensions = ','.join(ext_list)
+            
             # .env 파일 내용 생성
             normalized_path = os.path.normpath(folder_path)
             
@@ -186,6 +216,9 @@ GITHUB_REPO={repo_name}
 
 # 폴더 설정
 WATCH_FOLDER={normalized_path}
+
+# 파일 형식 설정
+FILE_EXTENSIONS={clean_file_extensions}
 
 # 기타 설정
 BRANCH=main
@@ -207,7 +240,7 @@ COMMIT_MESSAGE_PREFIX=Auto-upload:
             # .gitignore 업데이트
             self.update_gitignore()
             
-            # 🔧 성공 메시지 생성 (조건부로 수정)
+            # 성공 메시지 생성 (조건부로 수정)
             if upload_mode == "realtime":
                 mode_message = "실시간 감시 모드로 설정되었습니다."
             elif upload_mode == "schedule":
@@ -222,6 +255,7 @@ COMMIT_MESSAGE_PREFIX=Auto-upload:
 👀 감시 폴더: {normalized_path}
 {f"📂 감시 폴더를 새로 생성했습니다." if folder_created else ""}
 ⏰ {mode_message}
+📄 지원 파일 형식: {', '.join(ext_list)}
 🔒 .gitignore에 .env 추가 완료"""
             
             return True, success_message
@@ -278,7 +312,8 @@ Thumbs.db
                     'token': os.getenv('GITHUB_TOKEN', ''),
                     'username': os.getenv('GITHUB_USERNAME', ''),
                     'repo_name': os.getenv('GITHUB_REPO', ''),
-                    'folder_path': os.getenv('WATCH_FOLDER', '')
+                    'folder_path': os.getenv('WATCH_FOLDER', ''),
+                    'file_extensions': os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')  # 🔧 추가
                 }
             except:
                 return None
