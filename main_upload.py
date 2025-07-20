@@ -1,530 +1,445 @@
-# main_upload.py - 실시간 파일 삭제 감지 포함 완전 버전
-import time
-import requests
-import base64
+# main_upload.py - 업로드 기록 기능 포함 완성 버전
 import os
-import json
+import time
 import schedule
-import threading
-import glob
-from dotenv import load_dotenv
+from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from dotenv import load_dotenv
+import requests
+import base64
+import threading
+import json
+from pathlib import Path
+from upload_history import UploadHistoryManager
 
-# 전역 변수들
-GITHUB_TOKEN = None
-GITHUB_USERNAME = None
-REPO_NAME = None
-WATCH_FOLDER_PATH = None
-UPLOAD_MODE = None
-SCHEDULE_HOUR = None
-SCHEDULE_MINUTE = None
-REPEAT_OPTION = None
-BRANCH = None
-FILE_EXTENSIONS = None
-
-def check_env_config():
-    """환경 설정 확인"""
-    if not GITHUB_TOKEN:
-        print("❌ .env 파일에 GITHUB_TOKEN이 설정되지 않았습니다!")
-        print("💡 setup_gui.py를 먼저 실행해서 설정을 완료해주세요.")
-        return False
-    
-    required_vars = [GITHUB_USERNAME, REPO_NAME, WATCH_FOLDER_PATH]
-    if not all(required_vars):
-        print("❌ .env 파일의 설정이 불완전합니다!")
-        print("💡 setup_gui.py를 다시 실행해서 설정을 완료해주세요.")
-        return False
-    
-    if not os.path.exists(WATCH_FOLDER_PATH):
-        print(f"❌ 감시할 폴더가 존재하지 않습니다: {WATCH_FOLDER_PATH}")
-        return False
-    
-    return True
-
-def upload_file_to_github(local_file_path):
-    """GitHub에 파일 업로드 (이모티콘 커밋 메시지 포함)"""
-    print(" " * 50, end='\r')
-    print(f"\n📄 감지된 파일: {os.path.basename(local_file_path)}")
-    
-    repo_file_path = os.path.basename(local_file_path)
-    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{repo_file_path}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-    
-    try:
-        with open(local_file_path, "rb") as file:
-            content_encoded = base64.b64encode(file.read()).decode('utf-8')
-    except (FileNotFoundError, PermissionError) as e:
-        print(f"  ❌ 파일 읽기 실패: {e}")
-        return False
-    
-    # 기존 파일 확인 및 커밋 메시지 결정
-    sha = None
-    is_update = False
-    try:
-        response_get = requests.get(url, headers=headers)
-        if response_get.status_code == 200:
-            sha = response_get.json().get('sha')
-            is_update = True
-    except requests.exceptions.RequestException:
-        pass
-    
-    # 이모티콘 커밋 메시지 설정
-    if is_update:
-        commit_message = f"🔄 Update {repo_file_path}"
-        action_emoji = "🔄"
-        action_text = "업데이트"
-    else:
-        commit_message = f"➕ Add {repo_file_path}"
-        action_emoji = "➕"
-        action_text = "추가"
-    
-    # 업로드 데이터 준비
-    data = {
-        "message": commit_message,
-        "content": content_encoded
-    }
-    if sha:
-        data["sha"] = sha
-    
-    print(f"  🚀 {action_text} 업로드를 시도합니다...")
-    try:
-        response_put = requests.put(url, headers=headers, data=json.dumps(data))
-        if response_put.status_code in [200, 201]:
-            print(f"  ✅ {action_emoji} {repo_file_path} {action_text} 성공!")
-            return True
-        else:
-            print(f"  ❌ {repo_file_path} 업로드 실패! (상태 코드: {response_put.status_code})")
-            error_msg = response_put.json().get('message', 'Unknown error')
-            print(f"     오류 내용: {error_msg}")
-            return False
-    except requests.exceptions.RequestException as e:
-        print(f"  ❌ {repo_file_path} 네트워크 오류: {e}")
-        return False
-
-def get_github_files():
-    """GitHub 저장소의 파일 목록 가져오기"""
-    try:
-        url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents"
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+class GitHubUploader:
+    def __init__(self):
+        # 환경변수 로드
+        load_dotenv()
         
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            files_data = response.json()
-            # 파일만 필터링 (폴더 제외)
-            github_files = {}
-            for item in files_data:
-                if item['type'] == 'file':
-                    github_files[item['name']] = item['sha']
-            return github_files
-        else:
-            print(f"⚠️ GitHub 파일 목록 가져오기 실패: {response.status_code}")
-            return {}
-    except Exception as e:
-        print(f"⚠️ GitHub 파일 목록 가져오기 오류: {e}")
-        return {}
-
-def get_local_files():
-    """로컬 폴더의 파일 목록 가져오기"""
-    try:
-        # 환경변수에서 파일 형식 읽어오기
-        file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
-        file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
-        file_patterns = [f'*.{ext}' for ext in file_extensions_list]
+        # GitHub 설정
+        self.github_token = os.getenv('GITHUB_TOKEN')
+        self.github_username = os.getenv('GITHUB_USERNAME')
+        self.github_repo = os.getenv('GITHUB_REPO')
+        self.branch = os.getenv('BRANCH', 'main')
+        self.commit_message_prefix = os.getenv('COMMIT_MESSAGE_PREFIX', 'Auto-upload:')
         
-        local_files = set()
-        for pattern in file_patterns:
-            files = glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern))
-            for file_path in files:
-                if os.path.isfile(file_path):
-                    local_files.add(os.path.basename(file_path))
+        # 폴더 및 파일 설정
+        self.watch_folder = os.getenv('WATCH_FOLDER')
+        self.file_extensions = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css').split(',')
+        self.file_extensions = [ext.strip() for ext in self.file_extensions]
         
-        return local_files
-    except Exception as e:
-        print(f"⚠️ 로컬 파일 목록 가져오기 오류: {e}")
-        return set()
-
-def delete_file_from_github(filename, sha):
-    """GitHub에서 파일 삭제"""
-    try:
-        url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{filename}"
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        # 업로드 모드 설정
+        self.upload_mode = os.getenv('UPLOAD_MODE', 'realtime')
+        self.schedule_hour = int(os.getenv('SCHEDULE_HOUR', '14'))
+        self.schedule_minute = int(os.getenv('SCHEDULE_MINUTE', '30'))
+        self.repeat_option = os.getenv('REPEAT_OPTION', 'daily')
         
-        # 삭제 데이터 준비
-        data = {
-            "message": f"🗑️ Delete {filename}",
-            "sha": sha
+        # 프로필 정보
+        self.profile_name = os.getenv('PROFILE_NAME', 'default')
+        
+        # 기록 관리자
+        self.history_manager = UploadHistoryManager()
+        
+        # API 헤더
+        self.headers = {
+            'Authorization': f'token {self.github_token}',
+            'Accept': 'application/vnd.github.v3+json'
         }
         
-        print(f"  🗑️ {filename} 삭제를 시도합니다...")
-        response = requests.delete(url, headers=headers, data=json.dumps(data))
+        # 업로드 상태 추적
+        self.uploaded_files = set()
+        self.is_running = False
         
-        if response.status_code == 200:
-            print(f"  ✅ 🗑️ {filename} 삭제 성공!")
-            return True
-        else:
-            print(f"  ❌ {filename} 삭제 실패! (상태 코드: {response.status_code})")
-            error_msg = response.json().get('message', 'Unknown error')
-            print(f"     오류 내용: {error_msg}")
+        print("🚀 GitHub 자동 업로드 시스템 초기화 완료")
+        print(f"📂 감시 폴더: {self.watch_folder}")
+        print(f"📄 지원 파일: {', '.join(self.file_extensions)}")
+        print(f"🔧 업로드 모드: {self.upload_mode}")
+        print(f"👤 프로필: {self.profile_name}")
+    
+    def validate_settings(self):
+        """설정 검증"""
+        if not self.github_token:
+            print("❌ GitHub 토큰이 설정되지 않았습니다.")
             return False
-    except Exception as e:
-        print(f"  ❌ {filename} 삭제 오류: {e}")
-        return False
-
-def sync_deleted_files():
-    """삭제된 파일들을 GitHub에서도 제거"""
-    print(f"\n🔍 삭제된 파일 동기화 확인 중...")
-    
-    # GitHub와 로컬 파일 목록 가져오기
-    github_files = get_github_files()  # {filename: sha}
-    local_files = get_local_files()    # {filename}
-    
-    if not github_files:
-        print("📂 GitHub 저장소가 비어있거나 파일 목록을 가져올 수 없습니다.")
-        return
-    
-    # GitHub에만 있고 로컬에 없는 파일들 찾기
-    files_to_delete = []
-    for github_file, sha in github_files.items():
-        if github_file not in local_files:
-            files_to_delete.append((github_file, sha))
-    
-    if not files_to_delete:
-        print("🔄 삭제할 파일이 없습니다. 모든 파일이 동기화되어 있습니다.")
-        return
-    
-    print(f"🗑️ {len(files_to_delete)}개의 삭제된 파일을 발견했습니다.")
-    for filename, _ in files_to_delete:
-        print(f"   📄 {filename} (로컬에서 삭제됨)")
-    
-    # 삭제 실행
-    deleted = 0
-    failed = 0
-    for filename, sha in files_to_delete:
-        success = delete_file_from_github(filename, sha)
-        if success:
-            deleted += 1
-        else:
-            failed += 1
-        time.sleep(0.5)  # API 제한 방지
-    
-    # 결과 출력
-    if failed == 0:
-        print(f"\n🎉 파일 삭제 동기화 완료! 🗑️ {deleted}개 파일 모두 삭제됨")
-    else:
-        print(f"\n🎉 파일 삭제 동기화 완료! 🗑️ {deleted}개 삭제 성공, ❌ {failed}개 실패")
-    
-    print("=" * 60)
-
-def upload_existing_files():
-    """프로그램 시작 시 기존 파일들을 자동으로 업로드하고 삭제된 파일 동기화"""
-    print(f"\n📂 기존 파일 확인 중...")
-    
-    # 환경변수에서 파일 형식 읽어오기
-    file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
-    file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
-    file_patterns = [f'*.{ext}' for ext in file_extensions_list]
-    
-    print(f"📋 지원 파일 형식: {', '.join(file_extensions_list)}")
-    
-    files = []
-    for pattern in file_patterns:
-        files.extend(glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern)))
-    
-    if not files:
-        print("📁 기존 파일이 없습니다.")
-    else:
-        print(f"🔍 {len(files)}개의 기존 파일을 발견했습니다.")
-        print("📤 자동으로 기존 파일들을 업로드합니다...")
         
-        uploaded = 0
-        failed = 0
-        for file_path in files:
-            if os.path.isfile(file_path):
-                print(f"\n📄 기존 파일 처리: {os.path.basename(file_path)}")
-                success = upload_file_to_github(file_path)
-                if success:
-                    uploaded += 1
-                else:
-                    failed += 1
-                time.sleep(1)  # API 제한 방지
+        if not self.github_username:
+            print("❌ GitHub 사용자명이 설정되지 않았습니다.")
+            return False
         
-        # 업로드 결과
-        if failed == 0:
-            print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
-        else:
-            print(f"\n🎉 기존 파일 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
+        if not self.github_repo:
+            print("❌ GitHub 저장소가 설정되지 않았습니다.")
+            return False
+        
+        if not self.watch_folder or not os.path.exists(self.watch_folder):
+            print(f"❌ 감시 폴더가 존재하지 않습니다: {self.watch_folder}")
+            return False
+        
+        return True
     
-    # 삭제된 파일 동기화 추가
-    sync_deleted_files()
+    def test_github_connection(self):
+        """GitHub 연결 테스트"""
+        try:
+            url = f"https://api.github.com/repos/{self.github_username}/{self.github_repo}"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            
+            if response.status_code == 200:
+                print("✅ GitHub 연결 테스트 성공")
+                return True
+            else:
+                print(f"❌ GitHub 연결 테스트 실패: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ GitHub 연결 테스트 오류: {e}")
+            return False
+    
+    def should_upload_file(self, file_path):
+        """파일 업로드 여부 판단"""
+        # 파일 확장자 확인
+        file_ext = Path(file_path).suffix[1:].lower()  # .py -> py
+        if file_ext not in [ext.lower() for ext in self.file_extensions]:
+            return False
+        
+        # 숨김 파일 제외
+        if os.path.basename(file_path).startswith('.'):
+            return False
+        
+        # 파일 크기 확인 (100MB 제한)
+        try:
+            file_size = os.path.getsize(file_path)
+            if file_size > 100 * 1024 * 1024:  # 100MB
+                print(f"⚠️  파일이 너무 큽니다 (100MB 초과): {file_path}")
+                return False
+        except:
+            return False
+        
+        return True
+    
+    def get_file_content(self, file_path):
+        """파일 내용 읽기 (Base64 인코딩)"""
+        try:
+            with open(file_path, 'rb') as file:
+                content = file.read()
+                return base64.b64encode(content).decode('utf-8')
+        except Exception as e:
+            print(f"❌ 파일 읽기 실패: {file_path} - {e}")
+            return None
+    
+    def get_github_file_sha(self, github_path):
+        """GitHub에서 기존 파일의 SHA 값 가져오기"""
+        try:
+            url = f"https://api.github.com/repos/{self.github_username}/{self.github_repo}/contents/{github_path}"
+            response = requests.get(url, headers=self.headers)
+            
+            if response.status_code == 200:
+                return response.json().get('sha')
+            else:
+                return None
+        except Exception as e:
+            print(f"❌ SHA 값 조회 실패: {github_path} - {e}")
+            return None
+    
+    def upload_file_to_github(self, file_path):
+        """파일을 GitHub에 업로드"""
+        try:
+            # 파일 정보
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            relative_path = os.path.relpath(file_path, self.watch_folder)
+            github_path = relative_path.replace('\\', '/')  # Windows 경로 변환
+            
+            print(f"📤 업로드 시작: {github_path}")
+            
+            # 파일 내용 읽기
+            content = self.get_file_content(file_path)
+            if content is None:
+                raise Exception("파일 내용을 읽을 수 없습니다")
+            
+            # 기존 파일 SHA 확인
+            existing_sha = self.get_github_file_sha(github_path)
+            action = "update" if existing_sha else "upload"
+            
+            # 커밋 메시지 생성
+            commit_message = f"{self.commit_message_prefix} {github_path}"
+            
+            # GitHub API 요청 데이터
+            data = {
+                'message': commit_message,
+                'content': content,
+                'branch': self.branch
+            }
+            
+            if existing_sha:
+                data['sha'] = existing_sha
+            
+            # API 요청
+            url = f"https://api.github.com/repos/{self.github_username}/{self.github_repo}/contents/{github_path}"
+            response = requests.put(url, headers=self.headers, json=data, timeout=30)
+            
+            if response.status_code in [200, 201]:
+                response_data = response.json()
+                commit_hash = response_data.get('commit', {}).get('sha', '')
+                
+                # 성공 기록 추가
+                self.history_manager.add_record(
+                    file_path=file_path,
+                    action=action,
+                    status="success",
+                    commit_hash=commit_hash,
+                    file_size=file_size,
+                    profile_name=self.profile_name
+                )
+                
+                self.uploaded_files.add(file_path)
+                print(f"✅ 업로드 성공: {github_path} ({action})")
+                return True
+                
+            else:
+                error_msg = f"HTTP {response.status_code}: {response.text}"
+                raise Exception(error_msg)
+                
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ 업로드 실패: {github_path} - {error_message}")
+            
+            # 실패 기록 추가
+            self.history_manager.add_record(
+                file_path=file_path,
+                action=action if 'action' in locals() else "upload",
+                status="failed",
+                error_message=error_message,
+                file_size=file_size if 'file_size' in locals() else 0,
+                profile_name=self.profile_name
+            )
+            
+            return False
+    
+    def upload_all_files(self):
+        """감시 폴더의 모든 파일 업로드"""
+        print(f"\n🔍 {self.watch_folder} 폴더 스캔 중...")
+        
+        uploaded_count = 0
+        failed_count = 0
+        skipped_count = 0
+        
+        for root, dirs, files in os.walk(self.watch_folder):
+            for file in files:
+                file_path = os.path.join(root, file)
+                
+                if self.should_upload_file(file_path):
+                    if file_path not in self.uploaded_files:
+                        if self.upload_file_to_github(file_path):
+                            uploaded_count += 1
+                        else:
+                            failed_count += 1
+                        
+                        # API 제한 고려하여 잠시 대기
+                        time.sleep(1)
+                    else:
+                        skipped_count += 1
+                        # 건너뜀 기록 추가
+                        self.history_manager.add_record(
+                            file_path=file_path,
+                            action="upload",
+                            status="skipped",
+                            error_message="이미 업로드된 파일",
+                            file_size=os.path.getsize(file_path),
+                            profile_name=self.profile_name
+                        )
+        
+        print(f"\n📊 업로드 완료:")
+        print(f"   ✅ 성공: {uploaded_count}개")
+        print(f"   ❌ 실패: {failed_count}개")
+        print(f"   ⏭️  건너뜀: {skipped_count}개")
+        
+        return uploaded_count, failed_count, skipped_count
+
+class FileWatcher(FileSystemEventHandler):
+    def __init__(self, uploader):
+        self.uploader = uploader
+        self.last_modified = {}
+        
+    def on_modified(self, event):
+        if event.is_directory:
+            return
+        
+        file_path = event.src_path
+        
+        # 중복 이벤트 방지 (1초 내 같은 파일 수정 이벤트 무시)
+        current_time = time.time()
+        if file_path in self.last_modified:
+            if current_time - self.last_modified[file_path] < 1:
+                return
+        
+        self.last_modified[file_path] = current_time
+        
+        # 파일 업로드 여부 확인
+        if self.uploader.should_upload_file(file_path):
+            print(f"\n🔔 파일 변경 감지: {os.path.basename(file_path)}")
+            
+            # 파일이 완전히 쓰여질 때까지 잠시 대기
+            time.sleep(2)
+            
+            # 파일 업로드
+            self.uploader.upload_file_to_github(file_path)
+    
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        
+        file_path = event.src_path
+        
+        if self.uploader.should_upload_file(file_path):
+            print(f"\n🆕 새 파일 생성: {os.path.basename(file_path)}")
+            
+            # 파일이 완전히 생성될 때까지 잠시 대기
+            time.sleep(2)
+            
+            # 파일 업로드
+            self.uploader.upload_file_to_github(file_path)
 
 def scheduled_upload():
-    """예약된 시간에 실행되는 업로드 함수 (삭제 동기화 포함)"""
-    print(f"\n⏰ 예약 업로드 시작: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    """스케줄된 업로드 실행"""
+    print(f"\n⏰ 예약된 업로드 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 환경변수에서 파일 형식 읽어오기
-    file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
-    file_extensions_list = [ext.strip() for ext in file_extensions_str.split(',')]
-    file_patterns = [f'*.{ext}' for ext in file_extensions_list]
-    
-    print(f"📋 지원 파일 형식: {', '.join(file_extensions_list)}")
-    
-    files = []
-    for pattern in file_patterns:
-        files.extend(glob.glob(os.path.join(WATCH_FOLDER_PATH, pattern)))
-    
-    if not files:
-        print("📂 업로드할 파일이 없습니다.")
+    uploader = GitHubUploader()
+    if uploader.validate_settings():
+        uploader.upload_all_files()
     else:
-        print(f"📁 {len(files)}개 파일을 업로드합니다.")
-        uploaded = 0
-        failed = 0
-        
-        for file_path in files:
-            if os.path.isfile(file_path):
-                success = upload_file_to_github(file_path)
-                if success:
-                    uploaded += 1
-                else:
-                    failed += 1
-                time.sleep(1)  # API 제한 방지
-        
-        # 업로드 결과
-        if failed == 0:
-            print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 파일 모두 성공")
-        else:
-            print(f"\n🎉 예약 업로드 완료! ✅ {uploaded}개 성공, ❌ {failed}개 실패")
-    
-    # 삭제된 파일 동기화 추가
-    sync_deleted_files()
+        print("❌ 설정 오류로 인해 업로드를 건너뜁니다.")
 
-def setup_scheduler():
-    """스케줄러 설정"""
-    schedule_time = f"{SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d}"
+def setup_schedule(uploader):
+    """스케줄 설정"""
+    schedule_time = f"{uploader.schedule_hour:02d}:{uploader.schedule_minute:02d}"
     
-    if REPEAT_OPTION == "daily":
+    if uploader.repeat_option == "daily":
         schedule.every().day.at(schedule_time).do(scheduled_upload)
-        print(f"📅 매일 {schedule_time}에 업로드 예약됨")
-    elif REPEAT_OPTION == "weekdays":
-        for day in ["monday", "tuesday", "wednesday", "thursday", "friday"]:
-            getattr(schedule.every(), day).at(schedule_time).do(scheduled_upload)
-        print(f"📅 평일 {schedule_time}에 업로드 예약됨")
-    elif REPEAT_OPTION == "weekends":
+        print(f"📅 매일 {schedule_time}에 업로드 예약")
+    elif uploader.repeat_option == "weekdays":
+        schedule.every().monday.at(schedule_time).do(scheduled_upload)
+        schedule.every().tuesday.at(schedule_time).do(scheduled_upload)
+        schedule.every().wednesday.at(schedule_time).do(scheduled_upload)
+        schedule.every().thursday.at(schedule_time).do(scheduled_upload)
+        schedule.every().friday.at(schedule_time).do(scheduled_upload)
+        print(f"📅 평일 {schedule_time}에 업로드 예약")
+    elif uploader.repeat_option == "weekends":
         schedule.every().saturday.at(schedule_time).do(scheduled_upload)
         schedule.every().sunday.at(schedule_time).do(scheduled_upload)
-        print(f"📅 주말 {schedule_time}에 업로드 예약됨")
+        print(f"📅 주말 {schedule_time}에 업로드 예약")
 
 def run_scheduler():
-    """스케줄러 실행 (별도 쓰레드)"""
+    """스케줄러 실행"""
     while True:
         schedule.run_pending()
         time.sleep(60)  # 1분마다 체크
 
-# 🔧 실시간 파일 삭제 감지 포함 이벤트 핸들러
-class FileEventHandler(FileSystemEventHandler):
-    """파일 시스템 이벤트 핸들러 (삭제 감지 포함)"""
-    def on_created(self, event):
-        if not event.is_directory:
-            # 파일 형식 체크
-            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
-            if self.is_supported_file(file_ext):
-                print(f"\n➕ 새 파일 감지: {os.path.basename(event.src_path)}")
-                upload_file_to_github(event.src_path)
-
-    def on_modified(self, event):
-        if not event.is_directory:
-            # 파일 형식 체크
-            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
-            if self.is_supported_file(file_ext):
-                print(f"\n🔄 파일 수정 감지: {os.path.basename(event.src_path)}")
-                time.sleep(1)  # 파일 쓰기 완료 대기
-                upload_file_to_github(event.src_path)
-    
-    # 🔧 새로 추가: 파일 삭제 실시간 감지
-    def on_deleted(self, event):
-        if not event.is_directory:
-            # 파일 형식 체크
-            file_ext = os.path.splitext(event.src_path)[1][1:]  # 확장자 추출 (점 제거)
-            if self.is_supported_file(file_ext):
-                filename = os.path.basename(event.src_path)
-                print(f"\n🗑️ 파일 삭제 감지: {filename}")
-                self.handle_file_deletion(filename)
-    
-    def handle_file_deletion(self, filename):
-        """삭제된 파일을 GitHub에서도 제거"""
-        try:
-            # GitHub에서 파일 정보 가져오기 (sha 필요)
-            url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/{filename}"
-            headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-            
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                file_data = response.json()
-                sha = file_data.get('sha')
-                
-                if sha:
-                    success = delete_file_from_github(filename, sha)
-                    if success:
-                        print(f"  ✅ 실시간 삭제 완료: {filename}")
-                    else:
-                        print(f"  ❌ 실시간 삭제 실패: {filename}")
-                else:
-                    print(f"  ⚠️ {filename}의 SHA를 가져올 수 없습니다.")
-            elif response.status_code == 404:
-                print(f"  ℹ️ {filename}는 이미 GitHub에 없습니다.")
-            else:
-                print(f"  ⚠️ {filename} 정보 조회 실패: {response.status_code}")
-                
-        except Exception as e:
-            print(f"  ❌ {filename} 삭제 처리 중 오류: {e}")
-    
-    def is_supported_file(self, file_ext):
-        """지원되는 파일 형식인지 확인"""
-        file_extensions_str = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
-        supported_extensions = [ext.strip() for ext in file_extensions_str.split(',')]
-        return file_ext.lower() in supported_extensions
-
-def run_upload_system():
-    """메인 업로드 시스템 실행 함수 (GUI에서 호출용)"""
-    global GITHUB_TOKEN, GITHUB_USERNAME, REPO_NAME, WATCH_FOLDER_PATH
-    global UPLOAD_MODE, SCHEDULE_HOUR, SCHEDULE_MINUTE, REPEAT_OPTION, BRANCH, FILE_EXTENSIONS
-    
-    print("🚀 GitHub 자동 업로드 시스템 시작!")
+def main():
+    """메인 실행 함수"""
+    print("=" * 60)
+    print("🚀 GitHub 자동 업로드 시스템 시작")
     print("=" * 60)
     
-    # .env 파일 로드
-    load_dotenv()
+    # 업로더 초기화
+    uploader = GitHubUploader()
     
-    # 설정 값 로드
-    GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
-    GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
-    REPO_NAME = os.getenv('GITHUB_REPO')
-    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER')
-    UPLOAD_MODE = os.getenv('UPLOAD_MODE', 'realtime')
-    SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', 14))
-    SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', 30))
-    REPEAT_OPTION = os.getenv('REPEAT_OPTION', 'daily')
-    BRANCH = os.getenv('BRANCH', 'main')
-    FILE_EXTENSIONS = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
+    # 설정 검증
+    if not uploader.validate_settings():
+        print("❌ 설정 오류로 인해 프로그램을 종료합니다.")
+        input("Press Enter to exit...")
+        return
     
-    # 환경 설정 확인
-    if not check_env_config():
-        print("❌ 설정이 올바르지 않습니다!")
-        return False
+    # GitHub 연결 테스트
+    if not uploader.test_github_connection():
+        print("❌ GitHub 연결 실패로 인해 프로그램을 종료합니다.")
+        input("Press Enter to exit...")
+        return
     
-    print(f"✅ 설정 로드 완료!")
-    print(f"📍 사용자: {GITHUB_USERNAME}")
-    print(f"📂 저장소: {REPO_NAME}")
-    print(f"👀 감시 폴더: {WATCH_FOLDER_PATH}")
-    print(f"🔧 업로드 모드: {UPLOAD_MODE}")
-    print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")
+    uploader.is_running = True
     
-    # 기존 파일 자동 업로드 + 삭제 동기화
-    upload_existing_files()
-    
-    # 실시간 감시 시작
-    observer = None
-    if UPLOAD_MODE in ["realtime", "hybrid"]:
-        if not os.path.exists(WATCH_FOLDER_PATH):
-            os.makedirs(WATCH_FOLDER_PATH)
-            print(f"📁 감시 폴더를 생성했습니다: {WATCH_FOLDER_PATH}")
+    # 업로드 모드에 따른 실행
+    if uploader.upload_mode == "realtime":
+        print("\n🔄 실시간 감시 모드로 시작합니다...")
         
-        event_handler = FileEventHandler()
+        # 초기 업로드
+        print("\n📤 초기 파일 업로드를 시작합니다...")
+        uploader.upload_all_files()
+        
+        # 파일 감시 시작
+        event_handler = FileWatcher(uploader)
         observer = Observer()
-        observer.schedule(event_handler, WATCH_FOLDER_PATH, recursive=False)
+        observer.schedule(event_handler, uploader.watch_folder, recursive=True)
         observer.start()
-        print("🔄 실시간 파일 감시 시작! (추가/수정/삭제 모두 감지)")  # 🔧 메시지 업데이트
+        
+        print(f"\n👀 파일 감시 시작: {uploader.watch_folder}")
+        print("파일을 추가하거나 수정하면 자동으로 업로드됩니다.")
+        print("Ctrl+C를 눌러 종료하세요.")
+        
+        try:
+            while uploader.is_running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n\n⏹️  사용자가 중단했습니다.")
+        finally:
+            observer.stop()
+            observer.join()
     
-    # 스케줄러 시작
-    if UPLOAD_MODE in ["schedule", "hybrid"]:
-        setup_scheduler()
+    elif uploader.upload_mode == "schedule":
+        print(f"\n⏰ 시간 예약 모드로 시작합니다...")
+        
+        # 스케줄 설정
+        setup_schedule(uploader)
+        
+        print("스케줄러가 실행 중입니다.")
+        print("Ctrl+C를 눌러 종료하세요.")
+        
+        try:
+            run_scheduler()
+        except KeyboardInterrupt:
+            print("\n\n⏹️  사용자가 중단했습니다.")
+    
+    elif uploader.upload_mode == "hybrid":
+        print("\n🔄⏰ 혼합 모드로 시작합니다...")
+        
+        # 초기 업로드
+        print("\n📤 초기 파일 업로드를 시작합니다...")
+        uploader.upload_all_files()
+        
+        # 스케줄 설정
+        setup_schedule(uploader)
+        
+        # 스케줄러를 별도 스레드에서 실행
         scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
         scheduler_thread.start()
+        
+        # 파일 감시 시작
+        event_handler = FileWatcher(uploader)
+        observer = Observer()
+        observer.schedule(event_handler, uploader.watch_folder, recursive=True)
+        observer.start()
+        
+        print(f"\n👀 실시간 감시 시작: {uploader.watch_folder}")
+        print("파일 변경 시 즉시 업로드 + 예약된 시간에 전체 업로드")
+        print("Ctrl+C를 눌러 종료하세요.")
+        
+        try:
+            while uploader.is_running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n\n⏹️  사용자가 중단했습니다.")
+        finally:
+            observer.stop()
+            observer.join()
     
-    print("=" * 60)
-    print("📂 GitHub 자동 업로드 시스템이 실행 중입니다...")
-    print("💡 감시 폴더에서 파일을 추가/수정/삭제하면 자동으로 GitHub에 반영됩니다.")  # 🔧 메시지 업데이트
+    else:
+        print(f"❌ 알 수 없는 업로드 모드: {uploader.upload_mode}")
+        input("Press Enter to exit...")
+        return
     
-    return True
+    print("\n🏁 GitHub 자동 업로드 시스템 종료")
 
 if __name__ == "__main__":
-    # .env 파일 로드
-    load_dotenv()
-    
-    # 설정 값 로드
-    GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
-    GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
-    REPO_NAME = os.getenv('GITHUB_REPO')
-    WATCH_FOLDER_PATH = os.getenv('WATCH_FOLDER')
-    UPLOAD_MODE = os.getenv('UPLOAD_MODE', 'realtime')
-    SCHEDULE_HOUR = int(os.getenv('SCHEDULE_HOUR', 14))
-    SCHEDULE_MINUTE = int(os.getenv('SCHEDULE_MINUTE', 30))
-    REPEAT_OPTION = os.getenv('REPEAT_OPTION', 'daily')
-    BRANCH = os.getenv('BRANCH', 'main')
-    FILE_EXTENSIONS = os.getenv('FILE_EXTENSIONS', 'py,txt,md,json,js,html,css')
-    
-    # 환경 설정 확인
-    if not check_env_config():
-        input("⏸️ 아무 키나 눌러서 종료...")
-        exit(1)
-    
-    print(f"✅ 설정 로드 완료!")
-    print(f"📍 사용자: {GITHUB_USERNAME}")
-    print(f"📂 저장소: {REPO_NAME}")
-    print(f"👀 감시 폴더: {WATCH_FOLDER_PATH}")
-    print(f"🔧 업로드 모드: {UPLOAD_MODE}")
-    print(f"📄 지원 파일 형식: {FILE_EXTENSIONS}")
-    
-    # 기존 파일 자동 업로드 + 삭제 동기화
-    upload_existing_files()
-    
-    # 실시간 감시 시작
-    observer = None
-    if UPLOAD_MODE in ["realtime", "hybrid"]:
-        if not os.path.exists(WATCH_FOLDER_PATH):
-            os.makedirs(WATCH_FOLDER_PATH)
-            print(f"📁 감시 폴더를 생성했습니다: {WATCH_FOLDER_PATH}")
-        
-        event_handler = FileEventHandler()
-        observer = Observer()
-        observer.schedule(event_handler, WATCH_FOLDER_PATH, recursive=False)
-        observer.start()
-        print("🔄 실시간 파일 감시 시작! (추가/수정/삭제 모두 감지)")
-    
-    # 스케줄러 시작
-    if UPLOAD_MODE in ["schedule", "hybrid"]:
-        setup_scheduler()
-        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-        scheduler_thread.start()
-    
-    print("=" * 60)
-    print("📂 GitHub 자동 업로드 시스템이 실행 중입니다...")
-    print("💡 감시 폴더에서 파일을 추가/수정/삭제하면 자동으로 GitHub에 반영됩니다.")
-    print("(Ctrl+C를 눌러서 종료)")
-    
-    # 상태 표시
-    spinner = ['|', '/', '-', '\\']
-    i = 0
-    
     try:
-        while True:
-            mode_text = {
-                "realtime": "실시간 감시 (추가/수정/삭제)",
-                "schedule": f"예약 업로드 ({SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d})",
-                "hybrid": f"실시간 + 예약 ({SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d})"
-            }
-            
-            print(f"  👀 {mode_text.get(UPLOAD_MODE, '감시')} 중... {spinner[i % len(spinner)]}", 
-                  end='\r', flush=True)
-            i += 1
-            time.sleep(0.5)
-            
-    except KeyboardInterrupt:
-        if observer:
-            observer.stop()
-        print("\n🛑 시스템을 종료합니다...")
-        
-    if observer:
-        observer.join()
-    
-    print("👋 GitHub 자동 업로드 시스템이 종료되었습니다.")
+        main()
+    except Exception as e:
+        print(f"\n💥 예상치 못한 오류 발생: {e}")
+        input("Press Enter to exit...")
