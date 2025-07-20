@@ -526,28 +526,37 @@ COMMIT_MESSAGE_PREFIX=Auto-upload:
 .env.production
 .env.development
 
-# Profile Management
+# Profile Management (개인 설정 파일들)
 profiles.json
+upload_history.json  # 🔧 추가
+upload_process.pid
 
-# Security
+# Security (보안 관련 파일들)
 token.txt
 secrets/
+*.key
+*.pem
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
+dist/
+build/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+logs/
 """
         
         with open(gitignore_path, 'w', encoding='utf-8') as f:
