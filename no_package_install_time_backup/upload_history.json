@@ -1,0 +1,76 @@
+{
+  "records": [
+    {
+      "id": "20250721_004421_454",
+      "timestamp": "2025-07-21 00:44:21",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\main_gui.py",
+      "file_name": "main_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "8d7136294bd3c72ac0d19207d01ce58325e0465f",
+      "error_message": "",
+      "file_size": 55858,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_004418_429",
+      "timestamp": "2025-07-21 00:44:18",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\env_generate.py",
+      "file_name": "env_generate.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "29b6582b81533f895b0b5e3b55664fc2ca7253fd",
+      "error_message": "",
+      "file_size": 23373,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_004415_682",
+      "timestamp": "2025-07-21 00:44:15",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\baekjoon_gui.py",
+      "file_name": "baekjoon_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "639f7db13e91fbc47781a57c84ab06bc580979b2",
+      "error_message": "",
+      "file_size": 11158,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_000943_565",
+      "timestamp": "2025-07-21 00:09:43",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\main_gui.py",
+      "file_name": "main_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "28c15bf9153de6125e160996f07794a7b5100b08",
+      "error_message": "",
+      "file_size": 55858,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_000940_631",
+      "timestamp": "2025-07-21 00:09:40",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\env_generate.py",
+      "file_name": "env_generate.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "5e70be5cf9085ebb84cce03d98095eccfe5a74f1",
+      "error_message": "",
+      "file_size": 23373,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_000937_893",
+      "timestamp": "2025-07-21 00:09:37",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\baekjoon_gui.py",
+      "file_name": "baekjoon_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "07cc7e1bdee48051b03fb4ad336fa14c577f5225",
+      "error_message": "",
+      "file_size": 11158,
+      "profile_name": "default"
+    }
+  ]
+}
