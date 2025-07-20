@@ -1,0 +1,100 @@
+{
+  "records": [
+    {
+      "id": "20250721_013510_828",
+      "timestamp": "2025-07-21 01:35:10",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\system_trap.py",
+      "file_name": "system_trap.py",
+      "action": "upload",
+      "status": "success",
+      "commit_hash": "7eded04983a8804c57fd46afb88c8b20df7eb8eb",
+      "error_message": "",
+      "file_size": 14813,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013509_021",
+      "timestamp": "2025-07-21 01:35:09",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\setup_gui.py",
+      "file_name": "setup_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "baa4b4beff1fcff6410c2e0cd3ff9dfe8b105c52",
+      "error_message": "",
+      "file_size": 32713,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013507_179",
+      "timestamp": "2025-07-21 01:35:07",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\requirements.txt",
+      "file_name": "requirements.txt",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "1e5fd6ff1d58da00dfc316cd4f880fc04d146c69",
+      "error_message": "",
+      "file_size": 283,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013505_315",
+      "timestamp": "2025-07-21 01:35:05",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\profiles.json",
+      "file_name": "profiles.json",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "38231c2977c99ab2ed579e112e4758f2761b5514",
+      "error_message": "",
+      "file_size": 38,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013503_424",
+      "timestamp": "2025-07-21 01:35:03",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\main_upload.py",
+      "file_name": "main_upload.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "d1fb87a9cd9c4c1f8d24050f6e32ea5bb1b87540",
+      "error_message": "",
+      "file_size": 17199,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013501_386",
+      "timestamp": "2025-07-21 01:35:01",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\main_gui.py",
+      "file_name": "main_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "b565a1128206d805e01136ccbf52bc2b06136251",
+      "error_message": "",
+      "file_size": 55858,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013459_124",
+      "timestamp": "2025-07-21 01:34:59",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\env_generate.py",
+      "file_name": "env_generate.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "4f1495acba45f75a16fedfc1666ed93465ab0875",
+      "error_message": "",
+      "file_size": 23373,
+      "profile_name": "default"
+    },
+    {
+      "id": "20250721_013457_169",
+      "timestamp": "2025-07-21 01:34:57",
+      "file_path": "C:\\Users\\CJU\\Desktop\\git_auto\\baekjoon_gui.py",
+      "file_name": "baekjoon_gui.py",
+      "action": "update",
+      "status": "success",
+      "commit_hash": "eba77c2324caa60c4d40827b65a8b663706b10d9",
+      "error_message": "",
+      "file_size": 11158,
+      "profile_name": "default"
+    }
+  ]
+}
