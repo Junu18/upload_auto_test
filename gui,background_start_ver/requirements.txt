@@ -1,0 +1,14 @@
+# GitHub 자동 업로드 시스템
+# Python 요구 버전: 3.9+
+# 권장 버전: Python 3.9.19
+
+PyGithub==2.1.1
+python-dotenv==1.0.0
+watchdog==3.0.0
+schedule==1.2.0
+requests==2.31.0
+beautifulsoup4==4.12.2
+pyinstaller==5.13.0
+pystray==0.19.4
+Pillow==10.0.0
+psutil==5.9.5
