@@ -1,24 +1,35 @@
-# main_gui.py - 3단계: 프로필 선택 기능 추가된 완전 버전
+# main_gui.py - 업로드 시작/중지 토글 기능 추가된 완전 버전
 import tkinter as tk
-from tkinter import messagebox, ttk  # 🔧 3단계 추가: ttk
+from tkinter import messagebox, ttk
 import subprocess
 import os
 import sys
+import psutil  # 🔧 프로세스 관리용 추가
+import threading
+import time
 from dotenv import load_dotenv
-from env_generate import EnvGenerator  # 🔧 3단계 추가
+from env_generate import EnvGenerator
 
 class GitHubAutoUploadMain:
     def __init__(self):
         self.root = tk.Tk()
-        self.env_generator = EnvGenerator()  # 🔧 3단계 추가
-        self.current_profile = tk.StringVar()  # 🔧 3단계 추가
+        self.env_generator = EnvGenerator()
+        self.current_profile = tk.StringVar()
+        
+        # 🔧 업로드 프로세스 관리 변수들
+        self.upload_process = None
+        self.upload_pid_file = "upload_process.pid"
+        self.is_upload_running = False
+        
         self.setup_ui()
-        self.load_profiles()  # 🔧 3단계 추가: 프로필 목록 로드
-        self.update_status()  # 시작할 때 즉시 상태 체크
+        self.load_profiles()
+        self.update_status()
+        self.check_upload_process()  # 🔧 시작 시 업로드 프로세스 상태 체크
+        self.start_process_monitor()  # 🔧 프로세스 모니터링 시작
         
     def setup_ui(self):
         self.root.title("🚀 GitHub 자동 업로드")
-        self.root.geometry("500x700")  # 🔧 높이 증가
+        self.root.geometry("500x720")  # 높이 약간 증가
         self.root.resizable(False, False)
         
         # 메인 프레임
@@ -30,7 +41,7 @@ class GitHubAutoUploadMain:
                               font=("Arial", 20, "bold"), fg="navy")
         title_label.pack(pady=(0, 20))
         
-        # 🔧 3단계 추가: 프로필 선택 섹션
+        # 프로필 선택 섹션
         self.create_profile_section(main_frame)
         
         # 상태 표시 프레임
@@ -42,7 +53,6 @@ class GitHubAutoUploadMain:
         # 종료 버튼
         self.create_exit_button(main_frame)
     
-    # 🔧 3단계 추가: 프로필 선택 섹션
     def create_profile_section(self, parent):
         profile_frame = tk.LabelFrame(parent, text="🏷️ 프로필 선택", 
                                      font=("Arial", 12, "bold"), 
@@ -77,7 +87,6 @@ class GitHubAutoUploadMain:
                                           fg="gray")
         self.profile_info_label.pack(anchor='w', pady=(10, 0))
     
-    # 🔧 3단계 추가: 프로필 목록 로드
     def load_profiles(self):
         """프로필 목록을 로드하여 Combobox에 설정"""
         try:
@@ -113,7 +122,6 @@ class GitHubAutoUploadMain:
                 fg="red"
             )
     
-    # 🔧 3단계 추가: 프로필 변경 핸들러
     def on_profile_change(self, event=None):
         """프로필이 변경될 때 호출되는 함수"""
         selected_profile = self.current_profile.get()
@@ -154,7 +162,7 @@ class GitHubAutoUploadMain:
         status_frame = tk.LabelFrame(parent, text="📊 현재 상태", 
                                     font=("Arial", 12, "bold"), 
                                     padx=20, pady=15)
-        status_frame.pack(fill='x', pady=(0, 20))  # 🔧 간격 조정
+        status_frame.pack(fill='x', pady=(0, 20))
         
         self.status_label = tk.Label(status_frame, text="⚙️ 설정 확인 중...", 
                                     font=("Arial", 11), fg="orange")
@@ -171,6 +179,11 @@ class GitHubAutoUploadMain:
         self.mode_label = tk.Label(status_frame, text="🔧 업로드 모드: 확인 중...", 
                                   font=("Arial", 10), fg="gray")
         self.mode_label.pack(anchor='w', pady=2)
+        
+        # 🔧 업로드 상태 표시 추가
+        self.upload_status_label = tk.Label(status_frame, text="🚀 업로드 상태: 중지됨", 
+                                           font=("Arial", 10, "bold"), fg="red")
+        self.upload_status_label.pack(anchor='w', pady=2)
     
     def create_function_buttons(self, parent):
         button_frame = tk.Frame(parent)
@@ -198,11 +211,12 @@ class GitHubAutoUploadMain:
         second_row = tk.Frame(button_frame)
         second_row.pack(pady=10)
         
+        # 🔧 업로드 시작/중지 토글 버튼
         self.upload_btn = tk.Button(second_row, text="🚀\n업로드\n시작", 
                                    width=12, height=4,
                                    font=("Arial", 11, "bold"),
                                    bg="orange", fg="white",
-                                   command=self.start_upload)
+                                   command=self.toggle_upload)
         self.upload_btn.pack(side='left', padx=20)
         
         history_btn = tk.Button(second_row, text="📊\n업로드\n기록", 
@@ -223,8 +237,193 @@ class GitHubAutoUploadMain:
     def create_exit_button(self, parent):
         exit_btn = tk.Button(parent, text="종료", width=10, height=2,
                             font=("Arial", 11),
-                            command=self.root.quit)
-        exit_btn.pack(pady=20)  # 🔧 간격 조정
+                            command=self.on_exit)
+        exit_btn.pack(pady=20)
+    
+    # 🔧 업로드 시작/중지 토글 기능
+    def toggle_upload(self):
+        """업로드 시작/중지 토글"""
+        if self.is_upload_running:
+            self.stop_upload()
+        else:
+            self.start_upload()
+    
+    def start_upload(self):
+        """업로드 프로그램 시작"""
+        try:
+            # 이미 실행 중이면 중복 실행 방지
+            if self.is_upload_running:
+                messagebox.showwarning("경고", "업로드가 이미 실행 중입니다!")
+                return
+            
+            # 프로세스 시작
+            self.upload_process = subprocess.Popen([sys.executable, 'main_upload.py'])
+            
+            # PID 저장
+            with open(self.upload_pid_file, 'w') as f:
+                f.write(str(self.upload_process.pid))
+            
+            # 상태 업데이트
+            self.is_upload_running = True
+            self.update_upload_button()
+            
+            # 성공 메시지
+            current_profile = self.current_profile.get()
+            if current_profile:
+                message_text = f"GitHub 자동 업로드가 시작되었습니다!\n\n현재 프로필: {current_profile}\n콘솔 창에서 업로드 상태를 확인할 수 있습니다."
+            else:
+                message_text = "GitHub 자동 업로드가 시작되었습니다!\n\n콘솔 창에서 업로드 상태를 확인할 수 있습니다."
+            
+            messagebox.showinfo("시작", message_text)
+            print(f"✅ 업로드 프로세스 시작됨 (PID: {self.upload_process.pid})")
+            
+        except FileNotFoundError:
+            messagebox.showerror("오류", "main_upload.py 파일을 찾을 수 없습니다!")
+        except Exception as e:
+            messagebox.showerror("오류", f"업로드 프로그램을 시작할 수 없습니다: {e}")
+            self.is_upload_running = False
+            self.update_upload_button()
+    
+    def stop_upload(self):
+        """업로드 프로그램 중지"""
+        try:
+            if self.upload_process and self.upload_process.poll() is None:
+                # 프로세스가 아직 실행 중인 경우
+                try:
+                    # psutil로 프로세스 트리 전체 종료 (자식 프로세스도 함께)
+                    parent = psutil.Process(self.upload_process.pid)
+                    children = parent.children(recursive=True)
+                    
+                    # 자식 프로세스들 먼저 종료
+                    for child in children:
+                        try:
+                            child.terminate()
+                        except psutil.NoSuchProcess:
+                            pass
+                    
+                    # 부모 프로세스 종료
+                    parent.terminate()
+                    
+                    # 3초 대기 후 강제 종료
+                    gone, still_alive = psutil.wait_procs([parent] + children, timeout=3)
+                    for p in still_alive:
+                        try:
+                            p.kill()
+                        except psutil.NoSuchProcess:
+                            pass
+                    
+                    print(f"✅ 업로드 프로세스 종료됨 (PID: {self.upload_process.pid})")
+                    
+                except psutil.NoSuchProcess:
+                    print("ℹ️  프로세스가 이미 종료되었습니다")
+                except Exception as e:
+                    print(f"⚠️  프로세스 종료 중 오류: {e}")
+                    # psutil 실패 시 기본 방법 사용
+                    self.upload_process.terminate()
+            
+            # PID 파일 삭제
+            if os.path.exists(self.upload_pid_file):
+                os.remove(self.upload_pid_file)
+            
+            # 상태 업데이트
+            self.upload_process = None
+            self.is_upload_running = False
+            self.update_upload_button()
+            
+            messagebox.showinfo("중지", "GitHub 자동 업로드가 중지되었습니다!")
+            
+        except Exception as e:
+            messagebox.showerror("오류", f"업로드 프로그램을 중지할 수 없습니다: {e}")
+            print(f"❌ 업로드 중지 실패: {e}")
+    
+    # 🔧 업로드 버튼 상태 업데이트
+    def update_upload_button(self):
+        """업로드 버튼 상태 업데이트"""
+        if self.is_upload_running:
+            self.upload_btn.config(
+                text="⏹️\n업로드\n중지",
+                bg="red",
+                fg="white"
+            )
+            self.upload_status_label.config(
+                text="🚀 업로드 상태: 실행 중",
+                fg="green"
+            )
+        else:
+            self.upload_btn.config(
+                text="🚀\n업로드\n시작",
+                bg="orange",
+                fg="white"
+            )
+            self.upload_status_label.config(
+                text="🚀 업로드 상태: 중지됨",
+                fg="red"
+            )
+    
+    # 🔧 업로드 프로세스 상태 체크
+    def check_upload_process(self):
+        """시작 시 업로드 프로세스 상태 체크"""
+        try:
+            if os.path.exists(self.upload_pid_file):
+                with open(self.upload_pid_file, 'r') as f:
+                    pid = int(f.read().strip())
+                
+                # 프로세스가 실제로 실행 중인지 확인
+                if psutil.pid_exists(pid):
+                    try:
+                        process = psutil.Process(pid)
+                        # 프로세스 이름 확인 (python 프로세스인지)
+                        if 'python' in process.name().lower():
+                            self.is_upload_running = True
+                            self.upload_process = subprocess.Popen([], shell=False)  # 더미 객체
+                            self.upload_process.pid = pid
+                            print(f"ℹ️  기존 업로드 프로세스 발견 (PID: {pid})")
+                        else:
+                            # 다른 프로세스가 같은 PID를 사용 중
+                            os.remove(self.upload_pid_file)
+                    except psutil.NoSuchProcess:
+                        os.remove(self.upload_pid_file)
+                else:
+                    # 프로세스가 종료됨
+                    os.remove(self.upload_pid_file)
+            
+            self.update_upload_button()
+            
+        except Exception as e:
+            print(f"⚠️  프로세스 상태 체크 실패: {e}")
+            self.is_upload_running = False
+            self.update_upload_button()
+    
+    # 🔧 주기적 프로세스 모니터링
+    def start_process_monitor(self):
+        """프로세스 상태 주기적 모니터링"""
+        def monitor():
+            while True:
+                try:
+                    if self.is_upload_running and self.upload_process:
+                        # 프로세스가 종료되었는지 확인
+                        if self.upload_process.poll() is not None:
+                            # 프로세스가 종료됨
+                            self.is_upload_running = False
+                            self.upload_process = None
+                            
+                            # PID 파일 삭제
+                            if os.path.exists(self.upload_pid_file):
+                                os.remove(self.upload_pid_file)
+                            
+                            # UI 업데이트 (메인 스레드에서 실행)
+                            self.root.after(0, self.update_upload_button)
+                            print("ℹ️  업로드 프로세스가 종료되어 버튼 상태를 업데이트했습니다")
+                    
+                    time.sleep(2)  # 2초마다 체크
+                    
+                except Exception as e:
+                    print(f"⚠️  프로세스 모니터링 오류: {e}")
+                    time.sleep(5)  # 오류 시 5초 대기
+        
+        # 데몬 스레드로 시작
+        monitor_thread = threading.Thread(target=monitor, daemon=True)
+        monitor_thread.start()
     
     def update_status(self):
         """현재 설정 상태 확인"""
@@ -232,7 +431,7 @@ class GitHubAutoUploadMain:
             print("🔄 상태 업데이트 중...")
             
             if os.path.exists('.env'):
-                load_dotenv(override=True)  # 강제 재로드
+                load_dotenv(override=True)
                 
                 token = os.getenv('GITHUB_TOKEN')
                 username = os.getenv('GITHUB_USERNAME')
@@ -248,7 +447,6 @@ class GitHubAutoUploadMain:
                 print(f"   모드: {mode}")
                 
                 if all([token, username, repo, folder]):
-                    # 🔧 3단계: 현재 프로필 정보도 표시
                     current_profile = self.current_profile.get()
                     if current_profile:
                         self.status_label.config(
@@ -267,23 +465,30 @@ class GitHubAutoUploadMain:
                         "hybrid": "실시간 + 예약"
                     }
                     self.mode_label.config(text=f"🔧 업로드 모드: {mode_text.get(mode, mode)}", fg="black")
-                    self.upload_btn.config(state='normal', bg="orange")
-                    print("✅ 업로드 버튼 활성화!")
+                    
+                    # 업로드 실행 중이 아닐 때만 버튼 활성화
+                    if not self.is_upload_running:
+                        self.upload_btn.config(state='normal')
+                    
+                    print("✅ 설정 완료!")
                 else:
                     self.status_label.config(text="⚠️ 설정 불완전 - 환경설정 필요", fg="orange")
-                    self.upload_btn.config(state='disabled', bg="gray")
+                    if not self.is_upload_running:
+                        self.upload_btn.config(state='disabled', bg="gray")
                     print("⚠️ 설정 불완전")
             else:
                 self.status_label.config(text="❌ 설정 없음 - 환경설정 필요", fg="red")
                 self.folder_label.config(text="📁 감시 폴더: 설정되지 않음", fg="gray")
                 self.repo_label.config(text="📂 저장소: 설정되지 않음", fg="gray")
                 self.mode_label.config(text="🔧 업로드 모드: 설정되지 않음", fg="gray")
-                self.upload_btn.config(state='disabled', bg="gray")
+                if not self.is_upload_running:
+                    self.upload_btn.config(state='disabled', bg="gray")
                 print("❌ .env 파일 없음")
                 
         except Exception as e:
             self.status_label.config(text="❌ 설정 오류 발생", fg="red")
-            self.upload_btn.config(state='disabled', bg="gray")
+            if not self.is_upload_running:
+                self.upload_btn.config(state='disabled', bg="gray")
             print(f"❌ 에러: {e}")
     
     def open_baekjoon(self):
@@ -298,15 +503,12 @@ class GitHubAutoUploadMain:
     def open_setup(self):
         """환경설정 창 열기"""
         try:
-            # 환경설정 프로세스를 기다리도록 수정
             process = subprocess.Popen([sys.executable, 'setup_gui.py'])
             
-            # 🔧 3단계: 별도 스레드에서 프로세스 종료 대기 후 프로필 목록 새로고침
-            import threading
             def wait_and_update():
-                process.wait()  # 환경설정 창이 닫힐 때까지 대기
-                self.root.after(100, self.load_profiles)  # 프로필 목록 새로고침
-                self.root.after(200, self.update_status)  # 상태 업데이트
+                process.wait()
+                self.root.after(100, self.load_profiles)
+                self.root.after(200, self.update_status)
             
             threading.Thread(target=wait_and_update, daemon=True).start()
             
@@ -315,25 +517,22 @@ class GitHubAutoUploadMain:
         except Exception as e:
             messagebox.showerror("오류", f"환경설정 창을 열 수 없습니다: {e}")
     
-    def start_upload(self):
-        """업로드 프로그램 시작"""
-        try:
-            # 🔧 3단계: 현재 프로필 정보 포함
-            current_profile = self.current_profile.get()
-            if current_profile:
-                message_text = f"GitHub 자동 업로드 프로그램이 시작되었습니다!\n\n현재 프로필: {current_profile}\n콘솔 창에서 업로드 상태를 확인할 수 있습니다."
-            else:
-                message_text = "GitHub 자동 업로드 프로그램이 시작되었습니다!\n\n콘솔 창에서 업로드 상태를 확인할 수 있습니다."
-            
-            subprocess.Popen([sys.executable, 'main_upload.py'])
-            messagebox.showinfo("시작", message_text)
-        except FileNotFoundError:
-            messagebox.showerror("오류", "main_upload.py 파일을 찾을 수 없습니다!")
-        except Exception as e:
-            messagebox.showerror("오류", f"업로드 프로그램을 시작할 수 없습니다: {e}")
-    
     def show_history(self):
         messagebox.showinfo("개발 중", "업로드 기록 기능은 개발 중입니다!")
+    
+    # 🔧 종료 시 업로드 프로세스 정리
+    def on_exit(self):
+        """프로그램 종료 시 처리"""
+        if self.is_upload_running:
+            result = messagebox.askyesno(
+                "종료 확인", 
+                "업로드가 실행 중입니다.\n업로드를 중지하고 종료하시겠습니까?"
+            )
+            if result:
+                self.stop_upload()
+                self.root.quit()
+        else:
+            self.root.quit()
 
 if __name__ == "__main__":
     print("🚀 GitHub 자동 업로드 메인 GUI 시작...")
